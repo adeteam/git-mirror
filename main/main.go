@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 
@@ -10,10 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/adeteam/git-mirror/definition"
-)
-
-var (
-	config definition.Config
+	"github.com/adeteam/git-mirror/service"
 )
 
 func main() {
@@ -56,13 +55,14 @@ func main() {
 		logrus.SetLevel(logrus.DebugLevel)
 	}
 
-	config = definition.Config{
+	config := definition.Config{
 		StoragePath:    *storage,
 		WebhookTrigger: *webhook_trigger,
 		GitUsername:    *username,
 		GitPassword:    *password,
 		Port:           *port,
 	}
+	service.Config().Current = config
 
 	log.Infof("Starting Git-Mirror Service on %d", config.Port)
 	http.HandleFunc("/", DefaultHandler)
@@ -74,4 +74,27 @@ func main() {
 
 func DefaultHandler(response http.ResponseWriter, request *http.Request) {
 	log.Debugf("received request method %s on path %s", request.Method, request.RequestURI)
+	if request.Method != "POST" {
+		// we do not support any other methods
+		http.Error(response, "400 Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	var payload map[string]interface{}
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.WithError(err).Errorf("unable to read post body")
+		http.Error(response, "500 Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Debugf("JSON: %s", body)
+	json.Unmarshal(body, &payload)
+	if repository, ok := payload["repository"].(map[string]interface{}); ok {
+		repository_name := repository["full_name"].(string)
+		log.Debugf("received webhook by for %s", repository_name)
+	} else {
+		log.WithError(err).Errorf("unable to extract repository info from post body")
+		http.Error(response, "400 Bad Request", http.StatusBadRequest)
+	}
 }
