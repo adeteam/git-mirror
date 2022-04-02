@@ -7,6 +7,10 @@ Packages required for development, specific for Ubuntu 20.04
     apt-get install -y build-essential
     snap install go
 
+Packages required for operation.
+
+    apt-get install -y git
+
 Packages required for test validation, specific for Ubuntu 20.04
 
     snap install ngrok

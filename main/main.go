@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -80,21 +81,86 @@ func DefaultHandler(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	webhook_id := request.Header.Get("X-Hook-UUID")
+
 	var payload map[string]interface{}
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.WithError(err).Errorf("unable to read post body")
+		log.WithError(err).Errorf("[%s] unable to read post body", webhook_id)
 		http.Error(response, "500 Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	log.Debugf("JSON: %s", body)
+	log.Debugf("[%s] JSON: %s", webhook_id, body)
 	json.Unmarshal(body, &payload)
 	if repository, ok := payload["repository"].(map[string]interface{}); ok {
 		repository_name := repository["full_name"].(string)
-		log.Debugf("received webhook by for %s", repository_name)
+		log.Debugf("[%s] received webhook by for %s", webhook_id, repository_name)
+		// run this in a separate routine and allow send a response back
+		go func() {
+			forward_headers := []string{
+				"Content-Type",
+				"User-Agent",
+				"X-Attempt-Number",
+				"X-B3-Sampled",
+				"X-B3-SpanId",
+				"X-B3-TracedId",
+				"X-Event-Key",
+				"X-Event-Type",
+				"X-Hook-UUID",
+				"X-Request-UUID",
+			}
+
+			// ensure this repo is mirror
+			service.Git().HandleRepoMirror(repository_name)
+
+			// forward this webhook request
+			if service.Config().Current.WebhookTrigger != "" {
+				var sent_err error
+				client := http.Client{}
+
+				// we will try up to 3 times
+				for i := 0; i < 3; i++ {
+					forward_body := bytes.NewBuffer(body)
+					forward_request, err := http.NewRequest("POST", service.Config().Current.WebhookTrigger, forward_body)
+
+					for _, fheader := range forward_headers {
+						forward_request.Header.Add(
+							fheader,
+							request.Header.Get(fheader),
+						)
+					}
+
+					forward_response, err := client.Do(forward_request)
+					if err == nil {
+						forward_response_body, _ := ioutil.ReadAll(forward_response.Body)
+						// we have sent this request
+						log.Infof(
+							"[%s] webhook request forwarded, %s - %s",
+							webhook_id,
+							forward_response.Status,
+							forward_response_body,
+						)
+						sent_err = nil
+						break
+					} else {
+						sent_err = err
+					}
+				}
+
+				if sent_err != nil {
+					log.WithError(sent_err).Errorf("[%s] unable to forward webhook request", webhook_id)
+				}
+			}
+		}()
+
+		message := map[string]string{
+			"message": "thanks",
+		}
+		response.WriteHeader(http.StatusOK)
+		json.NewEncoder(response).Encode(message)
 	} else {
-		log.WithError(err).Errorf("unable to extract repository info from post body")
+		log.WithError(err).Errorf("[%s] unable to extract repository info from post body", webhook_id)
 		http.Error(response, "400 Bad Request", http.StatusBadRequest)
 	}
 }

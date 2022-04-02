@@ -23,3 +23,19 @@ func NewGitService() *GitService {
 		Password: Config().Current.GitPassword,
 	}
 }
+
+func (*GitService) HandleRepoMirror(repository string) error {
+	return nil
+}
+
+func (*GitService) HasRepo(repository string) bool {
+	return false
+}
+
+func (*GitService) MirrorRepo(repository string) error {
+	return nil
+}
+
+func (*GitService) UpdateRepo(repository string) error {
+	return nil
+}
